@@ -1,5 +1,8 @@
 use sqlx::{Pool, Postgres, Result, Transaction};
 
+/// Used to make the postgres table/view/function names pluggable. You'll
+/// typically want to use its implementor [`TaskTables`] that can be
+/// instantiated with a customizable schema and name prefix.
 pub trait TaskTableProvider: Send + Sync + 'static {
     fn schema_name(&self) -> &str;
     fn tasks_table(&self) -> &str;
@@ -55,6 +58,8 @@ impl TaskTableProvider for TaskTables {
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+/// Helper used by [`TaskTables`] but create/delete/test existance of postgres
+/// entities.
 #[derive(Debug, Clone)]
 enum EntityType {
     Function,
@@ -132,12 +137,12 @@ WHERE table_schema = $1 AND table_name = $2
 
         let query = match entity_type {
             EntityType::Function => {
-                format!("DROP FUNCTION {schema}.{name}")
+                format!("DROP FUNCTION {schema}.{name} CASCADE")
             }
             EntityType::View => {
-                format!("DROP VIEW {schema}.{name}")
+                format!("DROP VIEW {schema}.{name} CASCADE")
             }
-            EntityType::Table => format!("DROP TABLE {schema}.{name}"),
+            EntityType::Table => format!("DROP TABLE {schema}.{name} CASCADE"),
         };
 
         sqlx::query(&query).execute(tx).await?;
@@ -150,6 +155,7 @@ WHERE table_schema = $1 AND table_name = $2
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+/// Use this to make [`TaskTables`].
 #[derive(Default)]
 pub struct TaskTableBuilder {
     schema_name: Option<String>,
@@ -161,12 +167,15 @@ impl TaskTableBuilder {
         Self::default()
     }
 
+    /// The postgres schema name to install the task queue table into.
     #[must_use]
     pub fn schema_name(mut self, schema_name: impl ToString) -> Self {
         self.schema_name = Some(schema_name.to_string());
         self
     }
 
+    /// Prefix name used for the postgres entities. Useful if you want to install
+    /// multiple independent task queues into the same schema.
     #[must_use]
     pub fn base_name(mut self, base_name: impl ToString) -> Self {
         self.base_name = Some(base_name.to_string());
@@ -295,6 +304,19 @@ CREATE VIEW {schema}.{tasks_ready_name} AS (
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+/// [`TaskTables`] is used for creating the necessary tables/views/functions in
+/// a postgres database. It implements [`TaskTableProvider`] and can be passed
+/// to [`crate::Task`] and [`crate::Worker`] that use it for finding out what
+/// postgres entities to use.
+///
+/// Use [`TaskTableBuilder`] to create it or use `TaskTables::default()` if you
+/// are OK with default set of postgres entities.
+///
+/// That default will create:
+/// - table `public.tasks`
+/// - view `public.tasks_ready`
+/// - function `public.notify`
+/// - function `public.notify_done`
 #[derive(Debug, Clone)]
 pub struct TaskTables {
     schema: String,
@@ -312,6 +334,7 @@ impl Default for TaskTables {
 }
 
 impl TaskTables {
+    /// Check if the necessary postgres entities have been installed already.
     pub async fn exists(&self, pool: &Pool<Postgres>) -> Result<bool> {
         let mut tx = pool.begin().await?;
 
@@ -331,6 +354,9 @@ impl TaskTables {
         Ok(true)
     }
 
+    /// Create the necessary postgres entities for the task queue in the
+    /// connected postgres database. This function is idempotent and it will not
+    /// error if the entities already exist.
     pub async fn create(&self, pool: &Pool<Postgres>) -> Result<()> {
         let mut tx = pool.begin().await?;
         self.tasks_table.create(&mut tx).await?;
@@ -342,6 +368,8 @@ impl TaskTables {
         Ok(())
     }
 
+    /// Delete all postgres entities used by the task queue. This function is
+    /// idempotent and will not error if the entities don't exist.
     pub async fn drop(self, pool: &Pool<Postgres>) -> Result<()> {
         let mut tx = pool.begin().await?;
         self.tasks_ready.drop(&mut tx).await?;

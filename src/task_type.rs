@@ -1,24 +1,10 @@
+/// A [`TaskType`] is used to group kinds of tasks. This is useful if you have
+/// specialized workers, where one worker only processes on or a few types of
+/// tasks. You might also think of it as the "topic".
+/// In the simplest case just use a `String` or `&str`. But you can also use a
+/// custom enum that implements this trait.
 pub trait TaskType: ToString + std::fmt::Debug + Send + Sync {}
 
-#[derive(Clone, Debug)]
-pub struct TaskTypeString(pub String);
+impl TaskType for String {}
 
-impl From<String> for TaskTypeString {
-    fn from(name: String) -> Self {
-        Self(name)
-    }
-}
-
-impl From<&str> for TaskTypeString {
-    fn from(name: &str) -> Self {
-        Self(name.to_string())
-    }
-}
-
-impl std::fmt::Display for TaskTypeString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TaskType for TaskTypeString {}
+impl TaskType for &str {}

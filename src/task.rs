@@ -6,11 +6,47 @@ use std::collections::HashSet;
 use std::time::Instant;
 use uuid::Uuid;
 
-use crate::setup::TaskTableProvider;
-use crate::task_type::TaskType;
-use crate::Error;
+use crate::{Error, Result, TaskTableProvider, TaskType};
 
-use super::Result;
+#[derive(Default)]
+pub struct TaskBuilder {
+    task_type: String,
+    req: Option<Value>,
+    parent: Option<Uuid>,
+}
+
+impl TaskBuilder {
+    pub fn new(task_type: impl TaskType) -> Self {
+        Self {
+            task_type: task_type.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_request(mut self, req: impl Serialize) -> Result<Self> {
+        self.req = Some(serde_json::to_value(req)?);
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn with_parent(mut self, parent: Uuid) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
+    pub async fn build<'a, DB, P>(self, db: DB, tables: &P) -> Result<Task>
+    where
+        P: TaskTableProvider,
+        DB: Acquire<'a, Database = Postgres>,
+    {
+        let Self {
+            task_type,
+            req,
+            parent,
+        } = self;
+        Task::create_task(db, tables, task_type, req, parent).await
+    }
+}
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct Task {
@@ -28,13 +64,17 @@ pub struct Task {
 
 impl Task {
     #[instrument(level = "trace", skip(db, tables, req))]
-    pub async fn create_task<R: Serialize>(
-        db: impl Acquire<'_, Database = Postgres>,
-        tables: &dyn TaskTableProvider,
-        task_type: impl TaskType,
-        req: R,
+    async fn create_task<'a, P, DB>(
+        db: DB,
+        tables: &P,
+        task_type: String,
+        req: Option<Value>,
         parent: Option<Uuid>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        P: TaskTableProvider,
+        DB: Acquire<'a, Database = Postgres>,
+    {
         let id = uuid::Uuid::new_v4();
         let req = Some(serde_json::to_value(req)?);
 
@@ -76,6 +116,42 @@ RETURNING *
         let table = tables.tasks_table_full_name();
         let sql = format!("SELECT * FROM {table} WHERE id = $1");
         Ok(sqlx::query_as(&sql).bind(id).fetch_optional(db).await?)
+    }
+
+    pub async fn with_children(
+        self,
+        db: impl PgExecutor<'_>,
+        tables: &dyn TaskTableProvider,
+        recursive: bool,
+    ) -> Result<Vec<Self>> {
+        Self::load_including_children(db, tables, self.id, recursive).await
+    }
+
+    pub async fn load_including_children(
+        db: impl PgExecutor<'_>,
+        tables: &dyn TaskTableProvider,
+        id: Uuid,
+        recursive: bool,
+    ) -> Result<Vec<Self>> {
+        let table = tables.tasks_table_full_name();
+        let sql = if recursive {
+            format!(
+                "
+WITH RECURSIVE tasks_and_subtasks(id, parent) AS (
+     SELECT t.* FROM {table} t
+     WHERE t.id = $1
+     UNION ALL
+     SELECT child_task.*
+     FROM tasks_and_subtasks t, {table} child_task
+     WHERE t.id = child_task.parent
+)
+SELECT * FROM tasks_and_subtasks
+"
+            )
+        } else {
+            format!("SELECT * FROM {table} WHERE parent = $1")
+        };
+        Ok(sqlx::query_as(&sql).bind(id).fetch_all(db).await?)
     }
 
     #[instrument(level = "trace", skip(db, tables))]
@@ -212,6 +288,8 @@ WHERE id = $1"
         Ok(())
     }
 
+    /// Deletes this and all child tasks (recursively) from the DB. Call this
+    /// when the task is done.
     #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn delete(
         &self,

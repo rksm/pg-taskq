@@ -8,8 +8,7 @@ use std::{
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 
-use crate::{setup::TaskTableProvider, task::Task, task_type::TaskType};
-use crate::{Error, Result};
+use crate::{Error, Result, Task, TaskTableProvider, TaskType};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -20,7 +19,7 @@ enum LoopAction {
     Error(Error),
 }
 
-pub type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), Error>> + Send>>;
+type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), Error>> + Send>>;
 
 pub struct Worker {
     pool: Pool<Postgres>,

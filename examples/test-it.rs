@@ -4,12 +4,7 @@ extern crate tracing;
 use futures::FutureExt;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
-use psql_tasks_rs::{
-    setup::{TaskTableBuilder, TaskTables},
-    task::Task,
-    task_type::TaskTypeString,
-    worker::Worker,
-};
+use pg_taskq::{Task, TaskBuilder, TaskTableBuilder, TaskTables, Worker};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -39,11 +34,32 @@ async fn main() -> Result<()> {
     let tables = TaskTableBuilder::new().base_name("foo_tasks").build();
     tables.create(&pool).await.expect("create tables");
 
-    let result = run(pool.clone(), tables.clone()).await;
+    if true {
+        let result = run(pool.clone(), tables.clone()).await;
 
-    tables.drop(&pool).await.expect("drop tables");
+        tables.drop(&pool).await.expect("drop tables");
 
-    result
+        return result;
+    }
+
+    if false {
+        let task = Task::load(
+            &pool,
+            &tables,
+            "a066b03b-84f3-4713-a308-4dd1cc812192".parse().unwrap(),
+        )
+        .await?
+        .unwrap();
+
+        tracing::info!("found task {task:?} ");
+
+        let tasks = task.with_children(&pool, &tables, true).await?;
+
+        // tracing::info!("found children {tasks:#?} ");
+
+        // task.delete(&pool, &tables).await?;
+    }
+    Ok(())
 }
 
 async fn run(pool: Pool<Postgres>, tables: TaskTables) -> Result<()> {
@@ -52,7 +68,7 @@ async fn run(pool: Pool<Postgres>, tables: TaskTables) -> Result<()> {
     let worker_task = {
         let pool = pool.clone();
         let tables = tables.clone();
-        let types = ["Fooo", "Barr"].map(TaskTypeString::from).into();
+        let types = vec!["Fooo", "Barr"];
         tokio::spawn(Worker::start(
             pool.clone(),
             Box::new(tables.clone()),
@@ -75,22 +91,21 @@ async fn run(pool: Pool<Postgres>, tables: TaskTables) -> Result<()> {
 
     let mut parent_task = {
         let mut tx = pool.begin().await?;
-        let parent =
-            Task::create_task(&mut *tx, &tables, TaskTypeString::from("Barr"), (), None).await?;
-        Task::create_task(
-            &mut *tx,
-            &tables,
-            TaskTypeString::from("Fooo"),
-            (),
-            Some(parent.id),
-        )
-        .await?;
+        let a = TaskBuilder::new("Barr").build(&mut *tx, &tables).await?;
+        let b = TaskBuilder::new("Fooo")
+            .with_parent(a.id)
+            .build(&mut *tx, &tables)
+            .await?;
+        let _c = TaskBuilder::new("Fooo")
+            .with_parent(b.id)
+            .build(&mut *tx, &tables)
+            .await?;
         tx.commit().await?;
-        parent
+        a
     };
 
     parent_task.wait_until_done(&pool, &tables, None).await?;
-    let tasks = parent_task.with_children(&pool, &tables).await?;
+    // let tasks = parent_task.with_children(&pool, &tables).await?;
 
     debug!("stopping worker...");
     let _ = stop_tx.send(());

@@ -66,13 +66,13 @@ impl Worker {
 
         let mut last_status = UNIX_EPOCH;
 
-        tracing::info!("[{name}] starting");
+        info!("[{name}] starting");
 
         loop {
             // Get tasks that are ready that we haven't received a notification for
             if last_status.elapsed().unwrap_or_default() > Duration::from_secs(60) {
                 last_status = SystemTime::now();
-                tracing::info!("[{name}] looking for tasks of type {supported_tasks:?}");
+                info!("[{name}] looking for tasks of type {supported_tasks:?}");
             }
 
             tokio::select! {
@@ -84,13 +84,13 @@ impl Worker {
                             LoopAction::Error(err) => return Err(err),
                         },
                 _ = self.stop.recv() => {
-                    tracing::debug!("[{name}] Received STOP signal");
+                    debug!("[{name}] Received STOP signal");
                     break;
                 },
             };
 
             // wait for tasks becoming ready
-            tracing::trace!("[{name}] waiting for notifications...");
+            trace!("[{name}] waiting for notifications...");
 
             // let sleep_time =
             //     (self.duration_until_rate_limit_refresh().await?).min(Duration::from_secs(30));
@@ -98,7 +98,7 @@ impl Worker {
             let notification = tokio::select! {
                 notification = listener.recv() => notification,
                 _ = self.stop.recv() => {
-                    tracing::debug!("[{name}] Received STOP signal");
+                    debug!("[{name}] Received STOP signal");
                     break;
                 },
                 _ = tokio::time::sleep(sleep_time) => {
@@ -108,11 +108,11 @@ impl Worker {
 
             let notification = match notification {
                 Err(sqlx::Error::PoolClosed) => {
-                    tracing::warn!("[{name}] pool closed");
+                    warn!("[{name}] pool closed");
                     break;
                 }
                 Err(err) => {
-                    tracing::error!("[{name}] Error receiving notification {err}");
+                    error!("[{name}] Error receiving notification {err}");
                     return Err(err.into());
                 }
                 Ok(notification) => notification,
@@ -120,7 +120,7 @@ impl Worker {
 
             let id = match Uuid::parse_str(notification.payload()) {
                 Err(err) => {
-                    tracing::error!("[{name}] tasks_queue notification {notification:?} but were no able to parse task id: {err}");
+                    error!("[{name}] tasks_queue notification {notification:?} but were no able to parse task id: {err}");
                     return Ok(());
                 }
                 Ok(id) => id,
@@ -135,7 +135,7 @@ impl Worker {
             }
         }
 
-        tracing::info!("[{name}] stopping Worker");
+        info!("[{name}] stopping Worker");
         // self.env.close().now_or_never();
 
         Ok(())
@@ -153,19 +153,19 @@ impl Worker {
         match task {
             Ok(Some(task)) => {
                 let id = task.id;
-                tracing::trace!("[{name}] task with id {id:?} can be processed");
+                trace!("[{name}] task with id {id:?} can be processed");
                 if let Err(err) = process(task).await {
-                    tracing::error!("[{name}] Error processing task {id}: {err}");
+                    error!("[{name}] Error processing task {id}: {err}");
                 }
                 LoopAction::Restart
             }
             Ok(None) => LoopAction::DoNothing,
             Err(Error::Db(sqlx::error::Error::PoolClosed)) => {
-                tracing::warn!("[{name}] pool closed");
+                warn!("[{name}] pool closed");
                 LoopAction::Break
             }
             Err(err) => {
-                tracing::error!("[{name}] unexpected error dealing with task: {err}");
+                error!("[{name}] unexpected error dealing with task: {err}");
                 LoopAction::Error(err)
             }
         }

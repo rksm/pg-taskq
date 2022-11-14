@@ -104,7 +104,7 @@ WHERE table_schema = $1 AND table_name = $2
 
         let exists = n > 0;
 
-        tracing::debug!("{schema}.{name} exists={exists}");
+        debug!("{schema}.{name} exists={exists}");
 
         Ok(exists)
     }
@@ -114,7 +114,7 @@ WHERE table_schema = $1 AND table_name = $2
             return Ok(());
         }
         sqlx::query(&self.definition).execute(tx).await?;
-        tracing::debug!("{}.{} created", self.schema, self.name);
+        debug!("{}.{} created", self.schema, self.name);
         Ok(())
     }
 
@@ -142,7 +142,7 @@ WHERE table_schema = $1 AND table_name = $2
 
         sqlx::query(&query).execute(tx).await?;
 
-        tracing::debug!("{}.{} dropped", self.schema, self.name);
+        debug!("{}.{} dropped", self.schema, self.name);
 
         Ok(())
     }
@@ -350,7 +350,7 @@ impl TaskTables {
         self.tasks_table.drop(&mut tx).await?;
         tx.commit().await?;
 
-        tracing::debug!("cleanup for task setup done");
+        debug!("cleanup for task setup done");
 
         Ok(())
     }

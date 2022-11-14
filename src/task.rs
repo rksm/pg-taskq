@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::setup::TaskTableProvider;
 use crate::task_type::TaskType;
+use crate::Error;
 
 use super::Result;
 
@@ -26,7 +27,7 @@ pub struct Task {
 }
 
 impl Task {
-    #[tracing::instrument(level = "trace", skip(db, tables, req))]
+    #[instrument(level = "trace", skip(db, tables, req))]
     pub async fn create_task<R: Serialize>(
         db: impl Acquire<'_, Database = Postgres>,
         tables: &dyn TaskTableProvider,
@@ -62,7 +63,8 @@ RETURNING *
 
         tx.commit().await?;
 
-        tracing::debug!("created task {task_type:?} {id}");
+        debug!("created task {task_type:?} {id}");
+
         Ok(task)
     }
 
@@ -76,7 +78,7 @@ RETURNING *
         Ok(sqlx::query_as(&sql).bind(id).fetch_optional(db).await?)
     }
 
-    #[tracing::instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "trace", skip(db, tables))]
     pub async fn load_any_waiting(
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
@@ -109,7 +111,7 @@ RETURNING *;
         Ok(task)
     }
 
-    #[tracing::instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "trace", skip(db, tables))]
     pub async fn load_waiting(
         id: Uuid,
         db: impl PgExecutor<'_>,
@@ -144,83 +146,8 @@ RETURNING *;
         Ok(task)
     }
 
-    #[tracing::instrument(level = "trace", skip(pool, tables))]
-    pub async fn wait_for_tasks_to_be_done(
-        tasks: Vec<&mut Self>,
-        pool: &Pool<Postgres>,
-        tables: &dyn TaskTableProvider,
-    ) -> Result<()> {
-        fn update<'a>(
-            tasks_pending: Vec<&'a mut Task>,
-            tasks_done: &mut Vec<&'a mut Task>,
-            ids: std::collections::HashSet<Uuid>,
-        ) -> Vec<&'a mut Task> {
-            let (done, rest): (Vec<_>, Vec<_>) = tasks_pending
-                .into_iter()
-                .partition(|task| ids.contains(&task.id));
-            tasks_done.extend(done);
-            tracing::trace!("still waiting for {} tasks", rest.len());
-            rest
-        }
-
-        let mut tasks_pending = tasks.into_iter().collect::<Vec<_>>();
-        let mut tasks_done = Vec::new();
-        let now = Instant::now();
-        let mut listener = sqlx::postgres::PgListener::connect_with(pool).await?;
-        let queue_name = tables.tasks_queue_done_name();
-        listener.listen(&queue_name).await?;
-
-        let tasks_table = tables.tasks_table();
-        let sql = format!("SELECT id FROM {tasks_table} WHERE id = ANY($1) AND done = true");
-
-        loop {
-            tracing::trace!("waiting for task {} to be done", tasks_pending.len());
-
-            let ready: Vec<(Uuid,)> = sqlx::query_as(&sql)
-                .bind(tasks_pending.iter().map(|ea| ea.id).collect::<Vec<_>>())
-                .fetch_all(pool)
-                .await?;
-            tasks_pending = update(
-                tasks_pending,
-                &mut tasks_done,
-                HashSet::from_iter(ready.into_iter().map(|(id,)| id)),
-            );
-
-            if tasks_pending.is_empty() {
-                break;
-            }
-
-            let notification = tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                    continue;
-                },
-                notification = listener.recv() => notification,
-            };
-            if let Ok(notification) = notification {
-                if let Ok(id) = Uuid::parse_str(notification.payload()) {
-                    tasks_pending =
-                        update(tasks_pending, &mut tasks_done, HashSet::from_iter([id]));
-                    if tasks_pending.is_empty() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        for task in &mut tasks_done {
-            task.update(pool, tables).await?;
-        }
-
-        tracing::debug!(
-            "{} tasks done, wait time: {}ms",
-            tasks_done.len(),
-            (Instant::now() - now).as_millis()
-        );
-
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    /// Saves current state in DB
+    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn save(
         &self,
         db: impl Acquire<'_, Database = Postgres>,
@@ -252,12 +179,12 @@ WHERE id = $1"
             .await?;
 
         if self.done {
-            tracing::debug!("notifying about task done {}", self.id);
+            debug!("notifying about task done {}", self.id);
             let notify_fn = tables.tasks_notify_done_fn_full_name();
             let sql = format!("SELECT {notify_fn}($1)");
             sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
         } else {
-            tracing::debug!("notifying about task ready again {}", self.id);
+            debug!("notifying about task ready again {}", self.id);
             let notify_fn = tables.tasks_notify_done_fn_full_name();
             let sql = format!("SELECT {notify_fn}($1)");
             sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
@@ -268,13 +195,14 @@ WHERE id = $1"
         Ok(())
     }
 
-    #[tracing::instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    /// Queries state of this task from DB and updates self.
+    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn update(
         &mut self,
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
     ) -> Result<()> {
-        tracing::info!("UPDATING {}", self.id);
+        info!("UPDATING {}", self.id);
         let table = tables.tasks_table_full_name();
         let sql = format!("SELECT * FROM {table} WHERE id = $1");
         let me: Self = sqlx::query_as(&sql).bind(self.id).fetch_one(db).await?;
@@ -284,7 +212,7 @@ WHERE id = $1"
         Ok(())
     }
 
-    #[tracing::instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn delete(
         &self,
         db: impl PgExecutor<'_>,
@@ -296,45 +224,158 @@ WHERE id = $1"
         Ok(())
     }
 
-    #[tracing::instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    /// Takes `tasks` and listens for notifications until all tasks are done.
+    /// Inbetween notifications, at `poll_interval`, will manually query for
+    /// updated tasks. Will ensure that those tasks are updated when this method
+    /// returns.
+    #[instrument(level = "trace", skip(pool, tables))]
+    async fn wait_for_tasks_to_be_done(
+        tasks: Vec<&mut Self>,
+        pool: &Pool<Postgres>,
+        tables: &dyn TaskTableProvider,
+        poll_interval: Option<std::time::Duration>,
+    ) -> Result<()> {
+        fn update<'a>(
+            tasks_pending: Vec<&'a mut Task>,
+            tasks_done: &mut Vec<&'a mut Task>,
+            ids: std::collections::HashSet<Uuid>,
+        ) -> Vec<&'a mut Task> {
+            let (done, rest): (Vec<_>, Vec<_>) = tasks_pending
+                .into_iter()
+                .partition(|task| ids.contains(&task.id));
+            tasks_done.extend(done);
+            trace!("still waiting for {} tasks", rest.len());
+            rest
+        }
+
+        let start_time = Instant::now();
+        let mut tasks_pending = tasks.into_iter().collect::<Vec<_>>();
+        let mut tasks_done = Vec::new();
+
+        let mut listener = sqlx::postgres::PgListener::connect_with(pool).await?;
+        let queue_name = tables.tasks_queue_done_name();
+        listener.listen(&queue_name).await?;
+
+        let tasks_table = tables.tasks_table();
+        let sql = format!("SELECT id FROM {tasks_table} WHERE id = ANY($1) AND done = true");
+
+        loop {
+            trace!("waiting for task {} to be done", tasks_pending.len());
+
+            let ready: Vec<(Uuid,)> = sqlx::query_as(&sql)
+                .bind(tasks_pending.iter().map(|ea| ea.id).collect::<Vec<_>>())
+                .fetch_all(pool)
+                .await?;
+
+            tasks_pending = update(
+                tasks_pending,
+                &mut tasks_done,
+                HashSet::from_iter(ready.into_iter().map(|(id,)| id)),
+            );
+
+            if tasks_pending.is_empty() {
+                break;
+            }
+
+            let notification = if let Some(poll_interval) = poll_interval {
+                tokio::select! {
+                    _ = tokio::time::sleep(poll_interval) => {
+                        continue;
+                    },
+                    notification = listener.recv() => notification,
+                }
+            } else {
+                listener.recv().await
+            };
+
+            if let Ok(notification) = notification {
+                if let Ok(id) = Uuid::parse_str(notification.payload()) {
+                    tasks_pending =
+                        update(tasks_pending, &mut tasks_done, HashSet::from_iter([id]));
+                    if tasks_pending.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        for task in &mut tasks_done {
+            task.update(pool, tables).await?;
+        }
+
+        debug!(
+            "{} tasks done, wait time: {}ms",
+            tasks_done.len(),
+            (Instant::now() - start_time).as_millis()
+        );
+
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn wait_until_done(
         &mut self,
         db: &Pool<Postgres>,
         tables: &dyn TaskTableProvider,
+        poll_interval: Option<std::time::Duration>,
     ) -> Result<()> {
-        Self::wait_for_tasks_to_be_done(vec![self], db, tables).await
+        Self::wait_for_tasks_to_be_done(vec![self], db, tables, poll_interval).await
     }
 
     pub async fn wait_until_done_and_delete(
         &mut self,
         pool: &Pool<Postgres>,
         tables: &dyn TaskTableProvider,
+        poll_interval: Option<std::time::Duration>,
     ) -> Result<()> {
-        self.wait_until_done(pool, tables).await?;
+        self.wait_until_done(pool, tables, poll_interval).await?;
         self.delete(pool, tables).await?;
-        // self.as_result()
         Ok(())
     }
 
-    // pub fn request<R: DeserializeOwned>(&mut self) -> Result<R> {
-    //     let request = match self.request.take() {
-    //         None => return Err(Error::UpdateError("No request JSON".to_string())),
-    //         Some(request) => request,
-    //     };
-    //     Ok(serde_json::from_value(request)?)
-    // }
+    /// Takes request returns it deserialized.
+    pub fn request<R: serde::de::DeserializeOwned>(&mut self) -> Result<R> {
+        let request = match self.request.take() {
+            None => {
+                return Err(Error::TaskError {
+                    task: self.id,
+                    message: "No request JSON".to_string(),
+                })
+            }
+            Some(request) => request,
+        };
+        Ok(serde_json::from_value(request)?)
+    }
 
-    // pub fn as_result(&self) -> Result<()> {
-    //     if let Some(error) = &self.error {
-    //         return Err(Error::TaskError {
-    //             task: self.id,
-    //             message: match error.get("error").and_then(|msg| msg.as_str()) {
-    //                 Some(msg) => msg.to_string(),
-    //                 None => error.to_string(),
-    //             },
-    //         });
-    //     }
+    /// Converts self into the result payload (or error).
+    fn error(&mut self) -> Option<Error> {
+        self.error.take().map(|error| Error::TaskError {
+            task: self.id,
+            message: match error.get("error").and_then(|msg| msg.as_str()) {
+                Some(msg) => msg.to_string(),
+                None => error.to_string(),
+            },
+        })
+    }
 
-    //     Ok(())
-    // }
+    /// Takes the result returns it deserialized.
+    fn result<R: serde::de::DeserializeOwned>(&mut self) -> Result<R> {
+        let request = match self.result.take() {
+            None => {
+                return Err(Error::TaskError {
+                    task: self.id,
+                    message: "No result JSON".to_string(),
+                })
+            }
+            Some(request) => request,
+        };
+        Ok(serde_json::from_value(request)?)
+    }
+
+    /// Converts self into the result payload (or error).
+    pub fn as_result<R: serde::de::DeserializeOwned>(&mut self) -> Result<R> {
+        self.error()
+            .map(|err| Err(err))
+            .unwrap_or_else(|| self.result())
+    }
 }

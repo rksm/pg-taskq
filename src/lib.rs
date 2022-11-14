@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate tracing;
+
 mod error;
 pub mod setup;
 pub mod task;

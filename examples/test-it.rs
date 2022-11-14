@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate tracing;
+
 use futures::FutureExt;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
@@ -59,7 +62,7 @@ async fn run(pool: Pool<Postgres>, tables: TaskTables) -> Result<()> {
                 let pool = pool.clone();
                 let tables = tables.clone();
                 async move {
-                    tracing::info!("processing task {task:?}");
+                    info!("processing task {task:?}");
                     task.in_progress = false;
                     task.done = true;
                     task.save(&pool, &tables).await?;
@@ -86,9 +89,10 @@ async fn run(pool: Pool<Postgres>, tables: TaskTables) -> Result<()> {
         parent
     };
 
-    parent_task.wait_until_done(&pool, &tables).await?;
+    parent_task.wait_until_done(&pool, &tables, None).await?;
+    let tasks = parent_task.with_children(&pool, &tables).await?;
 
-    tracing::debug!("stopping worker...");
+    debug!("stopping worker...");
     let _ = stop_tx.send(());
 
     worker_task.await??;

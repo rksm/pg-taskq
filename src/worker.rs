@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 
-use crate::{task::Task, task_type::TaskType};
+use crate::{setup::TaskTableProvider, task::Task, task_type::TaskType};
 use crate::{Error, Result};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -20,17 +20,19 @@ enum LoopAction {
     Error(Error),
 }
 
-pub type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>;
+pub type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), Error>> + Send>>;
 
 pub struct Worker {
     pool: Pool<Postgres>,
     stop: Receiver<()>,
     name: String,
+    tables: Box<dyn TaskTableProvider>,
 }
 
 impl Worker {
     pub async fn start<F>(
         pool: Pool<Postgres>,
+        tables: Box<dyn TaskTableProvider>,
         stop: Receiver<()>,
         supported_tasks: Vec<impl TaskType>,
         process: F,
@@ -40,7 +42,12 @@ impl Worker {
     {
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let name = format!("Worker.{n}");
-        let mut worker = Self { pool, name, stop };
+        let mut worker = Self {
+            pool,
+            tables,
+            name,
+            stop,
+        };
         worker.run(supported_tasks, process).await
     }
 
@@ -55,7 +62,7 @@ impl Worker {
         let name = self.name.clone();
 
         let mut listener = sqlx::postgres::PgListener::connect_with(&self.pool).await?;
-        listener.listen("twitter_tasks_queue").await?;
+        listener.listen(self.tables.tasks_queue_name()).await?;
 
         let mut last_status = UNIX_EPOCH;
 
@@ -68,13 +75,19 @@ impl Worker {
                 tracing::info!("[{name}] looking for tasks of type {supported_tasks:?}");
             }
 
-            let task = Task::load_any_waiting(&self.pool, &supported_tasks).await;
-            match self.deal_with_task_result(task, &mut process).await {
-                LoopAction::Restart => continue,
-                LoopAction::DoNothing => {}
-                LoopAction::Break => break,
-                LoopAction::Error(err) => return Err(err),
-            }
+            tokio::select! {
+                task = Task::load_any_waiting(&self.pool, &*self.tables, &supported_tasks) =>
+                        match self.deal_with_task_result(task, &mut process).await {
+                            LoopAction::Restart => continue,
+                            LoopAction::DoNothing => {}
+                            LoopAction::Break => break,
+                            LoopAction::Error(err) => return Err(err),
+                        },
+                _ = self.stop.recv() => {
+                    tracing::debug!("[{name}] Received STOP signal");
+                    break;
+                },
+            };
 
             // wait for tasks becoming ready
             tracing::trace!("[{name}] waiting for notifications...");
@@ -107,13 +120,13 @@ impl Worker {
 
             let id = match Uuid::parse_str(notification.payload()) {
                 Err(err) => {
-                    tracing::error!("[{name}] twitter_tasks_queue notification {notification:?} but were no able to parse task id: {err}");
+                    tracing::error!("[{name}] tasks_queue notification {notification:?} but were no able to parse task id: {err}");
                     return Ok(());
                 }
                 Ok(id) => id,
             };
 
-            let task = Task::load_waiting(id, &self.pool, &supported_tasks).await;
+            let task = Task::load_waiting(id, &self.pool, &*self.tables, &supported_tasks).await;
             match self.deal_with_task_result(task, &mut process).await {
                 LoopAction::Restart => continue,
                 LoopAction::DoNothing => {}

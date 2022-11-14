@@ -1,5 +1,3 @@
-//! # pg-taskq
-//!
 //! pg-taskq is a simple postgres-based distributed task queue. It is:
 //!
 //! - pluggable: install it under a custom schema with custom table names, easily uninstall it again
@@ -12,8 +10,6 @@
 //! distributed task queue for various long-running processing tasks without
 //! having to maintain additional services and infrastructure. This thing is
 //! likely not production ready nor is it battle tested — use at your own risk.
-//!
-//!
 
 #[macro_use]
 extern crate tracing;

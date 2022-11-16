@@ -1,3 +1,7 @@
+__Please note: This is currently work in progress. The basics should work fine though I'm still cleaning up the implementation and extending the interface a littel. I'll soon publish a version to crates.io.__
+
+----------
+
 # pg-taskq
 
 pg-taskq is a simple postgres-based distributed task queue. It is:

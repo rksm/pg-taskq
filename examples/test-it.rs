@@ -2,9 +2,8 @@
 extern crate tracing;
 
 use futures::FutureExt;
-use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
-
 use pg_taskq::{Task, TaskBuilder, TaskTableBuilder, TaskTables, Worker};
+use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -22,8 +21,7 @@ pub async fn connection_pool(db_url: impl AsRef<str>) -> Result<Pool<Postgres>> 
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                .parse_lossy("debug,psql_tasks_rs=trace,sqlx=warn"),
+            tracing_subscriber::EnvFilter::builder().parse_lossy("debug,pg_taskq=trace,sqlx=debug"),
         )
         .init();
     dotenv::dotenv().expect(".env");
@@ -33,6 +31,8 @@ async fn main() -> Result<()> {
 
     let tables = TaskTableBuilder::new().base_name("foo_tasks").build();
     tables.create(&pool).await.expect("create tables");
+
+    tracing::info!("test?");
 
     if true {
         let result = run(pool.clone(), tables.clone()).await;

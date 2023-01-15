@@ -23,6 +23,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "705339e0e4a9690e2908d2b3d049d85682cf19fbd5782494498fbf7003a6a282"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atoi"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -914,6 +925,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
 
 [[package]]
+name = "pg-setup"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63b5ab0b18c4ff5843e7d5602850da356209311ae47ea1cb77e511bd240035c"
+dependencies = [
+ "async-trait",
+ "sqlx",
+ "thiserror",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "pg-taskq"
 version = "0.1.0"
 dependencies = [
@@ -922,7 +946,7 @@ dependencies = [
  "ctrlc",
  "dotenv",
  "futures",
- "pg-test-utilities",
+ "pg-setup",
  "serde",
  "serde_json",
  "sqlx",
@@ -932,17 +956,6 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "uuid",
-]
-
-[[package]]
-name = "pg-test-utilities"
-version = "0.1.0"
-source = "git+https://github.com/rksm/pg-test-utilities.git#156d1f24966a3bde573a604f2dd51e77169cd01a"
-dependencies = [
- "sqlx",
- "thiserror",
- "tracing",
- "url",
 ]
 
 [[package]]

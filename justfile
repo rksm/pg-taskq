@@ -1,7 +1,12 @@
 export RUST_BACKTRACE := "1"
+export RUST_LOG := "trace"
 
 default:
     just --list
 
 test:
-    RUST_LOG=trace cargo test -- --nocapture
+    cargo test -- --nocapture
+
+example *args='':
+    cargo run --example {{args}}
+

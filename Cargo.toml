@@ -20,7 +20,7 @@ uuid = { version = "1.2", features = ["serde", "v4"] }
 clap = "3"
 ctrlc = "3.2.2"
 dotenv = "0.15.0"
-pg-test-utilities = { git = "https://github.com/rksm/pg-test-utilities.git" }
+pg-setup = { version = "0.1.0", features = ["sqlx"] }
 
 [features]
 default = ["native-tls"]

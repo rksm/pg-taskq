@@ -359,12 +359,21 @@ WHERE id = $1"
     #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
     pub async fn delete(
         &self,
-        db: impl PgExecutor<'_>,
+        db: impl Acquire<'_, Database = Postgres>,
         tables: &dyn TaskTableProvider,
     ) -> Result<()> {
+        let mut tx = db.begin().await?;
+
         let table = tables.tasks_table_full_name();
         let sql = format!("DELETE FROM {table} WHERE id = $1");
-        sqlx::query(&sql).bind(self.id).execute(db).await?;
+        sqlx::query(&sql).bind(self.id).execute(&mut tx).await?;
+
+        let notify_fn = tables.tasks_notify_done_fn_full_name();
+        let sql = format!("SELECT {notify_fn}($1)");
+        sqlx::query(&sql).bind(self.id).execute(&mut tx).await?;
+
+        tx.commit().await?;
+
         Ok(())
     }
 
@@ -401,15 +410,22 @@ WHERE id = $1"
         listener.listen(&queue_name).await?;
 
         let tasks_table = tables.tasks_table();
-        let sql = format!("SELECT id FROM {tasks_table} WHERE id = ANY($1) AND done = true");
+        let ready_sql = format!("SELECT id FROM {tasks_table} WHERE id = ANY($1) AND done = true");
+        let existing_sql = format!("SELECT id FROM {tasks_table} WHERE id = ANY($1)");
 
         loop {
             trace!("waiting for task {} to be done", tasks_pending.len());
 
-            let ready: Vec<(Uuid,)> = sqlx::query_as(&sql)
+            let ready: Vec<(Uuid,)> = sqlx::query_as(&ready_sql)
                 .bind(tasks_pending.iter().map(|ea| ea.id).collect::<Vec<_>>())
                 .fetch_all(pool)
                 .await?;
+
+            let existing: Vec<(Uuid,)> = sqlx::query_as(&existing_sql)
+                .bind(tasks_pending.iter().map(|ea| ea.id).collect::<Vec<_>>())
+                .fetch_all(pool)
+                .await?;
+            let existing = existing.into_iter().map(|(id,)| id).collect::<HashSet<_>>();
 
             tasks_pending = update(
                 tasks_pending,
@@ -419,6 +435,13 @@ WHERE id = $1"
 
             if tasks_pending.is_empty() {
                 break;
+            }
+
+            // in case one of the tasks we are waiting for was deleted
+            for ea in &tasks_pending {
+                if !existing.contains(&ea.id) {
+                    return Err(Error::TaskDeleted { task: ea.id });
+                }
             }
 
             let notification = if let Some(poll_interval) = poll_interval {

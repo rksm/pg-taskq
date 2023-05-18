@@ -6,6 +6,9 @@ export RUST_LOG := "trace"
 default:
     just --list
 
+install:
+    cargo install --path . --bin pgtaskq
+
 test:
     cargo test -- --nocapture
 
@@ -19,7 +22,7 @@ example-worker *args='':
     bash -c 'cd examples/producer-worker-example && cargo run -- worker {{args}}'
 
 # spawns producers and workers
-supervisor *args='':
+example-supervisor *args='':
     bash -c 'cd examples/producer-worker-example && cargo run -- supervisor {{args}}'
 
 example-tasks:

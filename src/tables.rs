@@ -119,7 +119,7 @@ WHERE table_schema = $1 AND table_name = $2
             return Ok(());
         }
         sqlx::query(&self.definition).execute(tx).await?;
-        debug!("{}.{} created", self.schema, self.name);
+        info!("{}.{} created", self.schema, self.name);
         Ok(())
     }
 
@@ -147,7 +147,7 @@ WHERE table_schema = $1 AND table_name = $2
 
         sqlx::query(&query).execute(tx).await?;
 
-        debug!("{}.{} dropped", self.schema, self.name);
+        info!("{schema}.{name} dropped");
 
         Ok(())
     }

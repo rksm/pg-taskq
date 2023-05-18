@@ -13,6 +13,9 @@ pub enum Error {
 
     #[error("task {task} error: {message}")]
     TaskError { task: Uuid, message: String },
+
+    #[error("task {task} deleted")]
+    TaskDeleted { task: Uuid },
 }
 
 impl From<Error> for String {

@@ -84,11 +84,11 @@ async fn with_db(
     keep: bool,
     cb: impl FnOnce(Pool<Postgres>) -> Pin<Box<dyn Future<Output = Result<()>>>>,
 ) -> Result<()> {
-    const PG_URL: &str = "postgres://robert@localhost:5432/pg_taskq_test_simple_task";
+    let pg_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL env var");
 
     // create the db
     let db = {
-        let db = PostgresDBBuilder::new(PG_URL);
+        let db = PostgresDBBuilder::new(pg_url);
         let db = if keep { db.keep_db() } else { db };
         db.start().await?
     };

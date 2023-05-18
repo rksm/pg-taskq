@@ -2,3 +2,4 @@ target/
 .env
 scratch.sql
 DEV.org
+/src/env.rs

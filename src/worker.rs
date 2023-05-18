@@ -19,8 +19,7 @@ enum LoopAction {
     Error(Error),
 }
 
-type TaskFunctionResult =
-    Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send + std::panic::UnwindSafe>>;
+type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>;
 
 pub struct Worker {
     pool: Pool<Postgres>,

@@ -12,24 +12,21 @@ test:
 example *args='':
     cargo run --example {{args}}
 
-
 example-producer:
     bash -c 'cd examples/producer-worker-example && cargo run -- producer'
 
 example-worker *args='':
     bash -c 'cd examples/producer-worker-example && cargo run -- worker {{args}}'
 
+# spawns producers and workers
+supervisor *args='':
+    bash -c 'cd examples/producer-worker-example && cargo run -- supervisor {{args}}'
+
 example-tasks:
     psql ${EXAMPLE_DATABASE_URL} -c "SELECT * FROM foo_tasks;"
 
 clean:
     psql ${EXAMPLE_DATABASE_URL} -c "DELETE FROM foo_tasks;"
-
-# bash -c 'cd examples/producer-worker-example && cargo run --bin producer'
-# bash -c 'cd examples/producer-worker-example && cargo run --bin worker'
-
-# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/psql_tasks_rs_test_1
-# EXAMPLE_DATABASE_URL
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 

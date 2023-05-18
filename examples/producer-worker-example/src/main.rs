@@ -1,5 +1,6 @@
 mod producer;
 mod shared;
+mod supervisor;
 mod worker;
 
 use clap::Parser;
@@ -23,6 +24,8 @@ enum SubCommand {
     Worker(worker::Args),
     #[clap(name = "producer")]
     Producer(producer::Args),
+    #[clap(name = "supervisor")]
+    Supervisor(supervisor::Args),
 }
 
 #[tokio::main]
@@ -42,5 +45,8 @@ async fn main() {
         SubCommand::Producer(args) => producer::run(&db_url, args)
             .await
             .expect("failed to run producer"),
+        SubCommand::Supervisor(args) => {
+            supervisor::run(args);
+        }
     }
 }

@@ -49,10 +49,9 @@ pub async fn run(db_url: &str, args: Args) -> Result<()> {
                 async move {
                     tracing::info!("processing task {task:?}");
 
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
                     let children = task.children(&pool, &tables, false).await?;
-                    if !children.is_empty() {
-                        panic!("this is a test");
-                    }
                     let req = task.request::<Payload>()?;
                     let result = match req {
                         Payload::Add(a, b) => {

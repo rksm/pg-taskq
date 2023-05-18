@@ -145,6 +145,7 @@ RETURNING *
         Self::load_children(db, tables, self.id, false, recursive).await
     }
 
+    #[instrument(level = "trace", skip(db, tables))]
     pub async fn load_children(
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
@@ -172,8 +173,6 @@ SELECT * FROM tasks_and_subtasks {where_clause}
             let self_condition = if include_self { "OR t.id = $1" } else { "" };
             format!("SELECT * FROM {table} WHERE parent = $1 {self_condition}")
         };
-
-        tracing::info!("sql: {} {id}", sql);
 
         Ok(sqlx::query_as(&sql).bind(id).fetch_all(db).await?)
     }

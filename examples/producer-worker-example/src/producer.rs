@@ -72,7 +72,7 @@ async fn start_tasks(pool: Pool<Postgres>, tables: pg_taskq::TaskTables) -> Resu
         ))?
         .build(&mut *tx, &tables)
         .await?;
-    let b = pg_taskq::TaskBuilder::new("mul")
+    let _b = pg_taskq::TaskBuilder::new("mul")
         .with_id(b_id)
         .with_parent(a_id)
         .with_request(Payload::Mul(PayloadValue::Num(2.0), PayloadValue::Num(3.0)))?

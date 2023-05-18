@@ -50,6 +50,9 @@ pub async fn run(db_url: &str, args: Args) -> Result<()> {
                     tracing::info!("processing task {task:?}");
 
                     let children = task.children(&pool, &tables, false).await?;
+                    if !children.is_empty() {
+                        panic!("this is a test");
+                    }
                     let req = task.request::<Payload>()?;
                     let result = match req {
                         Payload::Add(a, b) => {

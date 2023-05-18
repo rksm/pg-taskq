@@ -19,7 +19,8 @@ enum LoopAction {
     Error(Error),
 }
 
-type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>;
+type TaskFunctionResult =
+    Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send + std::panic::UnwindSafe>>;
 
 pub struct Worker {
     pool: Pool<Postgres>,
@@ -173,50 +174,4 @@ impl Worker {
             }
         }
     }
-
-    // async fn request_types_worker_can_handle(&mut self) -> Result<Vec<&'static str>> {
-    //     self.env
-    //         .update_rate_limit_if_older_than(Duration::from_secs(90))
-    //         .await?;
-    //     let rate_limit = self.env.rate_limit();
-
-    //     let mut types = Vec::new();
-    //     if UserLookupRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(UserLookupRequest::type_name());
-    //     }
-    //     if FollowerIdsRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(FollowerIdsRequest::type_name());
-    //     }
-    //     if FriendIdsRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(FriendIdsRequest::type_name());
-    //     }
-    //     if FullUserUpdateRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(FullUserUpdateRequest::type_name());
-    //     }
-    //     if UserLookupInitRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(UserLookupInitRequest::type_name());
-    //     }
-    //     if UserLookupBatchRequest::api_methods()
-    //         .iter()
-    //         .all(|m| rate_limit.can_call(m))
-    //     {
-    //         types.push(UserLookupBatchRequest::type_name());
-    //     }
-    //     Ok(types)
-    // }
 }

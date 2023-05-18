@@ -14,3 +14,9 @@ pub enum Error {
     #[error("task {task} error: {message}")]
     TaskError { task: Uuid, message: String },
 }
+
+impl From<Error> for String {
+    fn from(value: Error) -> Self {
+        value.to_string()
+    }
+}

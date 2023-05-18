@@ -13,6 +13,7 @@ pub struct TaskBuilder {
     task_type: String,
     req: Option<Value>,
     parent: Option<Uuid>,
+    id: Option<Uuid>,
 }
 
 impl TaskBuilder {
@@ -34,6 +35,12 @@ impl TaskBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_id(mut self, id: Uuid) -> Self {
+        self.id = Some(id);
+        self
+    }
+
     pub async fn build<'a, DB, P>(self, db: DB, tables: &P) -> Result<Task>
     where
         P: TaskTableProvider,
@@ -43,8 +50,9 @@ impl TaskBuilder {
             task_type,
             req,
             parent,
+            id,
         } = self;
-        Task::create_task(db, tables, task_type, req, parent).await
+        Task::create_task(db, tables, id, task_type, req, parent).await
     }
 }
 
@@ -67,6 +75,7 @@ impl Task {
     async fn create_task<'a, P, DB>(
         db: DB,
         tables: &P,
+        id: Option<Uuid>,
         task_type: String,
         req: Option<Value>,
         parent: Option<Uuid>,
@@ -75,7 +84,7 @@ impl Task {
         P: TaskTableProvider,
         DB: Acquire<'a, Database = Postgres>,
     {
-        let id = uuid::Uuid::new_v4();
+        let id = id.unwrap_or_else(Uuid::new_v4);
         let req = Some(serde_json::to_value(req)?);
 
         let mut tx = db.begin().await?;
@@ -124,17 +133,28 @@ RETURNING *
         tables: &dyn TaskTableProvider,
         recursive: bool,
     ) -> Result<Vec<Self>> {
-        Self::load_including_children(db, tables, self.id, recursive).await
+        Self::load_children(db, tables, self.id, true, recursive).await
     }
 
-    pub async fn load_including_children(
+    pub async fn children(
+        &self,
+        db: impl PgExecutor<'_>,
+        tables: &dyn TaskTableProvider,
+        recursive: bool,
+    ) -> Result<Vec<Self>> {
+        Self::load_children(db, tables, self.id, false, recursive).await
+    }
+
+    pub async fn load_children(
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
         id: Uuid,
+        include_self: bool,
         recursive: bool,
     ) -> Result<Vec<Self>> {
         let table = tables.tasks_table_full_name();
         let sql = if recursive {
+            let where_clause = if include_self { "" } else { "WHERE t.id != $1" };
             format!(
                 "
 WITH RECURSIVE tasks_and_subtasks(id, parent) AS (
@@ -145,12 +165,16 @@ WITH RECURSIVE tasks_and_subtasks(id, parent) AS (
      FROM tasks_and_subtasks t, {table} child_task
      WHERE t.id = child_task.parent
 )
-SELECT * FROM tasks_and_subtasks
+SELECT * FROM tasks_and_subtasks {where_clause}
 "
             )
         } else {
-            format!("SELECT * FROM {table} WHERE parent = $1")
+            let self_condition = if include_self { "OR t.id = $1" } else { "" };
+            format!("SELECT * FROM {table} WHERE parent = $1 {self_condition}")
         };
+
+        tracing::info!("sql: {} {id}", sql);
+
         Ok(sqlx::query_as(&sql).bind(id).fetch_all(db).await?)
     }
 
@@ -220,6 +244,49 @@ RETURNING *;
             .await?;
 
         Ok(task)
+    }
+
+    /// Sets the error value for the task
+    #[instrument(level = "trace", skip(db, tables))]
+    pub async fn set_error(
+        id: Uuid,
+        db: impl Acquire<'_, Database = Postgres>,
+        tables: &dyn TaskTableProvider,
+        error: Value,
+    ) -> Result<()> {
+        let mut tx = db.begin().await?;
+
+        let table = tables.tasks_table_full_name();
+        let sql = format!(
+            "
+UPDATE {table}
+SET updated_at = NOW(),
+    error = $2,
+    in_progress = false
+WHERE id = $1"
+        );
+
+        sqlx::query(&sql)
+            .bind(id)
+            .bind(error)
+            .execute(&mut *tx)
+            .await?;
+
+        // if self.done {
+        //     debug!("notifying about task done {}", self.id);
+        //     let notify_fn = tables.tasks_notify_done_fn_full_name();
+        //     let sql = format!("SELECT {notify_fn}($1)");
+        //     sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
+        // } else {
+        //     debug!("notifying about task ready again {}", self.id);
+        //     let notify_fn = tables.tasks_notify_done_fn_full_name();
+        //     let sql = format!("SELECT {notify_fn}($1)");
+        //     sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
+        // }
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Saves current state in DB
@@ -417,12 +484,17 @@ WHERE id = $1"
             None => {
                 return Err(Error::TaskError {
                     task: self.id,
-                    message: "No request JSON".to_string(),
+                    message: "Task has no request JSON data".to_string(),
                 })
             }
             Some(request) => request,
         };
-        Ok(serde_json::from_value(request)?)
+        Ok(
+            serde_json::from_value(request).map_err(|err| Error::TaskError {
+                task: self.id,
+                message: format!("Error deserializing request JSON from task: {err}"),
+            })?,
+        )
     }
 
     /// Converts self into the result payload (or error).
@@ -437,23 +509,25 @@ WHERE id = $1"
     }
 
     /// Takes the result returns it deserialized.
-    fn result<R: serde::de::DeserializeOwned>(&mut self) -> Result<R> {
-        let request = match self.result.take() {
-            None => {
-                return Err(Error::TaskError {
-                    task: self.id,
-                    message: "No result JSON".to_string(),
-                })
-            }
-            Some(request) => request,
-        };
-        Ok(serde_json::from_value(request)?)
+    fn result<R: serde::de::DeserializeOwned>(&mut self) -> Result<Option<R>> {
+        match self.result.take() {
+            None => Ok(None),
+            Some(request) => Ok(Some(serde_json::from_value(request)?)),
+        }
+    }
+
+    /// Takes the result returns it deserialized.
+    #[allow(dead_code)]
+    pub fn result_cloned<R: serde::de::DeserializeOwned>(&self) -> Result<Option<R>> {
+        if let Some(result) = &self.result {
+            Ok(Some(serde_json::from_value(result.clone())?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Converts self into the result payload (or error).
-    pub fn as_result<R: serde::de::DeserializeOwned>(&mut self) -> Result<R> {
-        self.error()
-            .map(|err| Err(err))
-            .unwrap_or_else(|| self.result())
+    pub fn as_result<R: serde::de::DeserializeOwned>(&mut self) -> Result<Option<R>> {
+        self.error().map(Err).unwrap_or_else(|| self.result())
     }
 }

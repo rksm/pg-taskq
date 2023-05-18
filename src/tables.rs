@@ -228,6 +228,7 @@ $$ LANGUAGE plpgsql;
 "
         );
 
+        // TODO get rid of this? unused currently...
         let tasks_notify_done_fn_def = format!(
             "
 CREATE FUNCTION {schema}.{tasks_notify_done_name}(task_id uuid)

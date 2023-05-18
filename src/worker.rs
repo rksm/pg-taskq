@@ -19,7 +19,7 @@ enum LoopAction {
     Error(Error),
 }
 
-type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), Error>> + Send>>;
+type TaskFunctionResult = Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send>>;
 
 pub struct Worker {
     pool: Pool<Postgres>,
@@ -155,6 +155,10 @@ impl Worker {
                 trace!("[{name}] task with id {id:?} can be processed");
                 if let Err(err) = process(task).await {
                     error!("[{name}] Error processing task {id}: {err}");
+                    let error = serde_json::json!({"error": err.to_string()});
+                    if let Err(err) = Task::set_error(id, &self.pool, &*self.tables, error).await {
+                        error!("[{name}] Unable to set_error for {id}: {err}");
+                    }
                 }
                 LoopAction::Restart
             }

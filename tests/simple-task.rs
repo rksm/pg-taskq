@@ -42,8 +42,7 @@ async fn simple_task() -> Result<()> {
                             tracing::info!("processing task {task:?}");
                             task.in_progress = false;
                             task.done = true;
-                            task.save(&pool, &tables).await?;
-                            Ok(())
+                            task.save(&pool, &tables).await.map_err(|e| e.to_string())
                         }
                         .boxed()
                     },

@@ -17,6 +17,7 @@
 extern crate tracing;
 
 mod error;
+mod helper;
 mod tables;
 mod task;
 mod task_type;
@@ -27,3 +28,5 @@ pub use tables::{TaskTableBuilder, TaskTableProvider, TaskTables};
 pub use task::{Task, TaskBuilder};
 pub use task_type::TaskType;
 pub use worker::Worker;
+
+pub use helper::fixup_stale_tasks;

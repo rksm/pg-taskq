@@ -26,6 +26,8 @@ pub async fn run(db_url: &str, args: Args) -> Result<()> {
         .base_name("foo_tasks")
         .build();
 
+    pg_taskq::fixup_stale_tasks(&pool, &tables, std::time::Duration::from_secs(60 * 60)).await?;
+
     tracing::info!("step 2: starting worker");
 
     let (stop_tx, stop_rx) = tokio::sync::broadcast::channel(1);

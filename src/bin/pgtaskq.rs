@@ -8,8 +8,8 @@ struct Args {
 
     #[clap(
         long = "db",
-        help = "The postgres database connection to use",
-        env = "DATABASE_URL"
+        help = "The postgres database connection to use, in the foramt postgres://user:pass@host:port/dbname",
+        env = "PGTASKQ_DB"
     )]
     database_url: String,
 
@@ -17,7 +17,7 @@ struct Args {
         long,
         action,
         default_value = "false",
-        help = "If the database referenced by DATABASE_URL does not exist, attempt to create it"
+        help = "If the database referenced by PGTASKQ_DB does not exist, attempt to create it"
     )]
     create_db: bool,
 
@@ -27,7 +27,8 @@ struct Args {
     #[clap(
         long,
         short = 'n',
-        help = "The base table name for postgres tables and views"
+        help = "The base table name for postgres tables and views",
+        env = "PGTASKQ_TABLES"
     )]
     base_name: String,
 }
@@ -36,9 +37,13 @@ struct Args {
 enum SubCommand {
     Install(Install),
     Uninstall(Uninstall),
+
     List(List),
     Delete(Delete),
     Fixup(Fixup),
+
+    Submit(Submit),
+    Fullfill(Fullfill),
 }
 
 #[derive(Parser)]
@@ -62,7 +67,7 @@ struct List {
 #[derive(Parser)]
 #[clap(about = "Delete tasks from the queue")]
 struct Delete {
-    #[clap(long)]
+    #[clap()]
     id: uuid::Uuid,
 
     #[clap(
@@ -72,6 +77,50 @@ struct Delete {
         help = "Force delete task, even if not done"
     )]
     force: bool,
+}
+
+#[derive(Parser)]
+#[clap(about = "Submit a new task to the queue")]
+struct Submit {
+    #[clap(long)]
+    parent: Option<uuid::Uuid>,
+
+    #[clap(long = "type", short = 't')]
+    task_type: String,
+
+    #[clap(long, short, help = "The request JSON to be processed.")]
+    request: Option<serde_json::Value>,
+
+    #[clap(
+        long,
+        short,
+        action,
+        default_value = "false",
+        help = "Wait for task to complete"
+    )]
+    wait: bool,
+
+    #[clap(
+        long,
+        action,
+        default_value = "false",
+        help = "Delete the task after it completes (implies --wait)",
+        requires = "wait"
+    )]
+    delete: bool,
+}
+
+#[derive(Parser)]
+#[clap(about = "Mark a task as done")]
+struct Fullfill {
+    #[clap()]
+    id: uuid::Uuid,
+
+    #[clap(long, short, help = "The result JSON.")]
+    result: Option<serde_json::Value>,
+
+    #[clap(long, short, help = "The error JSON.", conflicts_with = "result")]
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Parser)]
@@ -238,6 +287,70 @@ async fn main() {
             pg_taskq::fixup_stale_tasks(&pool, &tables, cmd.duration)
                 .await
                 .expect("fixup tasks");
+        }
+
+        SubCommand::Submit(cmd) => {
+            let Submit {
+                parent,
+                task_type,
+                request,
+                wait,
+                delete,
+            } = cmd;
+
+            let mut task =
+                pg_taskq::Task::create_task(&pool, &tables, None, task_type, request, parent)
+                    .await
+                    .expect("create task");
+
+            println!("Created task with id {}", task.id);
+
+            if wait {
+                task.wait_until_done(&pool, &tables, Some(std::time::Duration::from_secs(10)))
+                    .await
+                    .expect("wait for task");
+
+                task.update(&pool, &tables).await.expect("update task");
+
+                let mut failed = false;
+                match (&task.error, &task.result) {
+                    (Some(error), _) => {
+                        failed = true;
+                        let pretty = serde_json::to_string_pretty(&error)
+                            .unwrap_or_else(|_| "<Unable to JSON parse error>".to_string());
+                        println!("Task failed with error {}", pretty);
+                    }
+                    (_, Some(result)) => {
+                        let pretty = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| "<Unable to JSON parse result>".to_string());
+                        println!("Task completed with result {}", pretty);
+                    }
+                    _ => {
+                        println!("Task completed with no result");
+                    }
+                }
+
+                if delete {
+                    task.delete(&pool, &tables).await.expect("delete task");
+                }
+
+                if failed {
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        SubCommand::Fullfill(cmd) => {
+            let Fullfill { id, result, error } = cmd;
+
+            let mut task = pg_taskq::Task::load(&pool, &tables, id)
+                .await
+                .expect("load task")
+                .expect("task not found");
+
+            task.fullfill(&pool, &tables, result, error)
+                .await
+                .expect("fullfill task");
         }
     }
 }

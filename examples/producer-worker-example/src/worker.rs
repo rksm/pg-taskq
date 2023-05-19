@@ -68,11 +68,9 @@ pub async fn run(db_url: &str, args: Args) -> Result<()> {
                         }
                     };
 
-                    task.result = Some(result.into());
+                    task.fullfill(&pool, &tables, Some(result.into()), None)
+                        .await?;
 
-                    task.in_progress = false;
-                    task.done = true;
-                    task.save(&pool, &tables).await?;
                     Ok(())
                 }
                 .boxed()

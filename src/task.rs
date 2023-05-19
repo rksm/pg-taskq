@@ -72,7 +72,7 @@ pub struct Task {
 
 impl Task {
     #[instrument(level = "trace", skip(db, tables, req))]
-    async fn create_task<'a, P, DB>(
+    pub async fn create_task<'a, DB, P>(
         db: DB,
         tables: &P,
         id: Option<Uuid>,
@@ -327,7 +327,7 @@ WHERE id = $1"
             sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
         } else {
             debug!("notifying about task ready again {}", self.id);
-            let notify_fn = tables.tasks_notify_done_fn_full_name();
+            let notify_fn = tables.tasks_notify_fn_full_name();
             let sql = format!("SELECT {notify_fn}($1)");
             sqlx::query(&sql).bind(self.id).execute(&mut *tx).await?;
         }
@@ -375,6 +375,22 @@ WHERE id = $1"
         tx.commit().await?;
 
         Ok(())
+    }
+
+    /// Fullfill task with result/error and mark as done
+    #[instrument(level = "trace", skip(self, db, tables, result, error), fields(id=%self.id))]
+    pub async fn fullfill(
+        &mut self,
+        db: impl Acquire<'_, Database = Postgres>,
+        tables: &dyn TaskTableProvider,
+        result: Option<impl Into<Value>>,
+        error: Option<impl Into<Value>>,
+    ) -> Result<()> {
+        self.result = result.map(Into::into);
+        self.error = error.map(Into::into);
+        self.in_progress = false;
+        self.done = true;
+        self.save(db, tables).await
     }
 
     /// Takes `tasks` and listens for notifications until all tasks are done.
@@ -486,7 +502,8 @@ WHERE id = $1"
         tables: &dyn TaskTableProvider,
         poll_interval: Option<std::time::Duration>,
     ) -> Result<()> {
-        Self::wait_for_tasks_to_be_done(vec![self], db, tables, poll_interval).await
+        Self::wait_for_tasks_to_be_done(vec![self], db, tables, poll_interval).await?;
+        Ok(())
     }
 
     pub async fn wait_until_done_and_delete(
@@ -511,12 +528,11 @@ WHERE id = $1"
             }
             Some(request) => request,
         };
-        Ok(
-            serde_json::from_value(request).map_err(|err| Error::TaskError {
-                task: self.id,
-                message: format!("Error deserializing request JSON from task: {err}"),
-            })?,
-        )
+
+        serde_json::from_value(request).map_err(|err| Error::TaskError {
+            task: self.id,
+            message: format!("Error deserializing request JSON from task: {err}"),
+        })
     }
 
     /// Converts self into the result payload (or error).

@@ -32,6 +32,7 @@ tracing-tree = "0.2.2"
 uuid = { version = "1.2", features = ["serde", "v4"] }
 pg-setup = { version = "0.1.1", features = ["sqlx"] }
 prettytable-rs = "0.10.0"
+ctrlc = "3.2.5"
 
 [features]
 default = ["native-tls"]

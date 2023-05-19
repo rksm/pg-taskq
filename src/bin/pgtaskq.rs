@@ -306,6 +306,44 @@ async fn main() {
             println!("Created task with id {}", task.id);
 
             if wait {
+                let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                if delete {
+                    let done = done.clone();
+                    let task_id = task.id;
+                    let pool = pool.clone();
+                    let tables = tables.clone();
+                    ctrlc::set_handler(move || {
+                        if !done.load(std::sync::atomic::Ordering::SeqCst) {
+                            done.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap()
+                                .block_on(async {
+                                    let task = pg_taskq::Task::load(&pool, &tables, task_id)
+                                        .await
+                                        .expect("load task");
+
+                                    match task {
+                                        None => {
+                                            println!("Task with id {} not found", task_id);
+                                            std::process::exit(1);
+                                        }
+                                        Some(task) => {
+                                            task.delete(&pool, &tables).await.expect("delete task");
+                                            println!("Deleted task with id {}", task_id);
+                                            std::process::exit(1);
+                                        }
+                                    }
+                                });
+
+                            std::process::exit(1);
+                        }
+                    })
+                    .expect("install ctrlc handler");
+                }
+
                 task.wait_until_done(&pool, &tables, Some(std::time::Duration::from_secs(10)))
                     .await
                     .expect("wait for task");
@@ -329,6 +367,8 @@ async fn main() {
                         println!("Task completed with no result");
                     }
                 }
+
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
 
                 if delete {
                     task.delete(&pool, &tables).await.expect("delete task");

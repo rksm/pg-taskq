@@ -43,6 +43,7 @@ enum SubCommand {
     Fixup(Fixup),
 
     Submit(Submit),
+    Wait(Wait),
     Fullfill(Fullfill),
 }
 
@@ -69,14 +70,13 @@ struct List {
 struct Delete {
     #[clap()]
     id: uuid::Uuid,
-
-    #[clap(
-        long,
-        default_value = "false",
-        action,
-        help = "Force delete task, even if not done"
-    )]
-    force: bool,
+    // #[clap(
+    //     long,
+    //     default_value = "false",
+    //     action,
+    //     help = "Force delete task, even if not done"
+    // )]
+    // force: bool,
 }
 
 #[derive(Parser)]
@@ -89,7 +89,7 @@ struct Submit {
     task_type: String,
 
     #[clap(long, short, help = "The request JSON to be processed.")]
-    request: Option<serde_json::Value>,
+    request: Option<String>,
 
     #[clap(
         long,
@@ -106,6 +106,21 @@ struct Submit {
         default_value = "false",
         help = "Delete the task after it completes (implies --wait)",
         requires = "wait"
+    )]
+    delete: bool,
+}
+
+#[derive(Parser)]
+#[clap(about = "Wait for a task")]
+struct Wait {
+    #[clap()]
+    id: uuid::Uuid,
+
+    #[clap(
+        long,
+        action,
+        default_value = "false",
+        help = "Delete the task after it completes"
     )]
     delete: bool,
 }
@@ -270,12 +285,11 @@ async fn main() {
                     std::process::exit(1);
                 }
                 Some(task) => {
-                    if !task.done && !cmd.force {
+                    if !task.done {
                         println!(
-                            "Task with id {} is not done, use --force to delete anyway",
+                            "WARNING, Task with id {} is not done, deleting anyway :P",
                             cmd.id
                         );
-                        std::process::exit(1);
                     }
 
                     task.delete(&pool, tables).await.expect("delete task");
@@ -298,86 +312,33 @@ async fn main() {
                 delete,
             } = cmd;
 
-            let mut task =
+            let request = request.map(|r| serde_json::from_str(&r).expect("parse request"));
+
+            let task =
                 pg_taskq::Task::create_task(&pool, &tables, None, task_type, request, parent)
                     .await
                     .expect("create task");
 
-            println!("Created task with id {}", task.id);
+            println!("{}", task.id);
 
             if wait {
-                let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                if delete {
-                    let done = done.clone();
-                    let task_id = task.id;
-                    let pool = pool.clone();
-                    let tables = tables.clone();
-                    ctrlc::set_handler(move || {
-                        if !done.load(std::sync::atomic::Ordering::SeqCst) {
-                            done.store(true, std::sync::atomic::Ordering::SeqCst);
-
-                            tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap()
-                                .block_on(async {
-                                    let task = pg_taskq::Task::load(&pool, &tables, task_id)
-                                        .await
-                                        .expect("load task");
-
-                                    match task {
-                                        None => {
-                                            println!("Task with id {} not found", task_id);
-                                            std::process::exit(1);
-                                        }
-                                        Some(task) => {
-                                            task.delete(&pool, &tables).await.expect("delete task");
-                                            println!("Deleted task with id {}", task_id);
-                                            std::process::exit(1);
-                                        }
-                                    }
-                                });
-
-                            std::process::exit(1);
-                        }
-                    })
-                    .expect("install ctrlc handler");
-                }
-
-                task.wait_until_done(&pool, &tables, Some(std::time::Duration::from_secs(10)))
-                    .await
-                    .expect("wait for task");
-
-                task.update(&pool, &tables).await.expect("update task");
-
-                let mut failed = false;
-                match (&task.error, &task.result) {
-                    (Some(error), _) => {
-                        failed = true;
-                        let pretty = serde_json::to_string_pretty(&error)
-                            .unwrap_or_else(|_| "<Unable to JSON parse error>".to_string());
-                        println!("Task failed with error {}", pretty);
-                    }
-                    (_, Some(result)) => {
-                        let pretty = serde_json::to_string_pretty(&result)
-                            .unwrap_or_else(|_| "<Unable to JSON parse result>".to_string());
-                        println!("Task completed with result {}", pretty);
-                    }
-                    _ => {
-                        println!("Task completed with no result");
-                    }
-                }
-
-                done.store(true, std::sync::atomic::Ordering::SeqCst);
-
-                if delete {
-                    task.delete(&pool, &tables).await.expect("delete task");
-                }
-
-                if failed {
-                    std::process::exit(1);
-                }
+                wait_for_task(task, delete, pool, tables).await;
             }
+        }
+
+        SubCommand::Wait(cmd) => {
+            let task = pg_taskq::Task::load(&pool, &tables, cmd.id)
+                .await
+                .expect("load task");
+
+            let Some(task) = task else {
+                println!("Task with id {} not found", cmd.id);
+                std::process::exit(1);
+            };
+
+            println!("Waiting for task {}", task.id);
+
+            wait_for_task(task, cmd.delete, pool, tables).await;
         }
 
         SubCommand::Fullfill(cmd) => {
@@ -392,5 +353,84 @@ async fn main() {
                 .await
                 .expect("fullfill task");
         }
+    }
+}
+
+async fn wait_for_task(
+    mut task: pg_taskq::Task,
+    delete: bool,
+    pool: sqlx::PgPool,
+    tables: pg_taskq::TaskTables,
+) {
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if delete {
+        let done = done.clone();
+        let task_id = task.id;
+        let pool = pool.clone();
+        let tables = tables.clone();
+        ctrlc::set_handler(move || {
+            if !done.load(std::sync::atomic::Ordering::SeqCst) {
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        let task = pg_taskq::Task::load(&pool, &tables, task_id)
+                            .await
+                            .expect("load task");
+
+                        match task {
+                            None => {
+                                println!("Task with id {} not found", task_id);
+                                std::process::exit(1);
+                            }
+                            Some(task) => {
+                                task.delete(&pool, &tables).await.expect("delete task");
+                                println!("Deleted task with id {}", task_id);
+                                std::process::exit(1);
+                            }
+                        }
+                    });
+
+                std::process::exit(1);
+            }
+        })
+        .expect("install ctrlc handler");
+    }
+
+    task.wait_until_done(&pool, &tables, Some(std::time::Duration::from_secs(10)))
+        .await
+        .expect("wait for task");
+
+    task.update(&pool, &tables).await.expect("update task");
+
+    let mut failed = false;
+    match (&task.error, &task.result) {
+        (Some(error), _) => {
+            failed = true;
+            let pretty = serde_json::to_string_pretty(&error)
+                .unwrap_or_else(|_| "<Unable to JSON parse error>".to_string());
+            println!("Task failed with error {}", pretty);
+        }
+        (_, Some(result)) => {
+            let pretty = serde_json::to_string_pretty(&result)
+                .unwrap_or_else(|_| "<Unable to JSON parse result>".to_string());
+            println!("Task completed with result {}", pretty);
+        }
+        _ => {
+            println!("Task completed with no result");
+        }
+    }
+
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    if delete {
+        task.delete(&pool, &tables).await.expect("delete task");
+    }
+
+    if failed {
+        std::process::exit(1);
     }
 }

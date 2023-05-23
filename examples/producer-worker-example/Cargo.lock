@@ -1108,6 +1108,7 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",
+ "ctrlc",
  "futures",
  "humantime",
  "pg-setup",

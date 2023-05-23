@@ -30,3 +30,21 @@ pub use task_type::TaskType;
 pub use worker::Worker;
 
 pub use helper::fixup_stale_tasks;
+
+pub async fn connect(
+    db_uri: impl AsRef<str>,
+    task_table_name: impl AsRef<str>,
+) -> sqlx::Result<(sqlx::PgPool, TaskTables)> {
+    // ensure that the tables used for the task queue exist
+    tracing::info!("setup taskq tables");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(db_uri.as_ref())
+        .await?;
+    let tables = TaskTableBuilder::new()
+        .base_name(task_table_name.as_ref())
+        .build();
+    tables.create(&pool).await?;
+
+    Ok((pool, tables))
+}

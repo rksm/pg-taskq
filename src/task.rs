@@ -56,7 +56,7 @@ impl TaskBuilder {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Task {
     pub id: Uuid,
     pub parent: Option<Uuid>,

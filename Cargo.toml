@@ -23,14 +23,14 @@ futures = "0.3.25"
 humantime = "2.1.0"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.87"
-sqlx = { version = "0.6", features = ["postgres", "macros", "uuid", "chrono", "json", "offline"] }
+sqlx = { version = "0.7", features = ["postgres", "macros", "uuid", "chrono", "json"] }
 thiserror = "1.0.37"
 tokio = { version = "1.18.0", features = ["full"] }
 tracing = { version = "0.1.37", features = ["release_max_level_debug"] }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 tracing-tree = "0.2.2"
 uuid = { version = "1.2", features = ["serde", "v4"] }
-pg-setup = { version = "0.1.1", features = ["sqlx"] }
+pg-setup = { version = "0.2", features = ["sqlx"] }
 prettytable-rs = "0.10.0"
 ctrlc = "3.2.5"
 

@@ -363,14 +363,15 @@ WHERE id = $1"
         tables: &dyn TaskTableProvider,
     ) -> Result<()> {
         let mut tx = db.begin().await?;
+        let con = tx.acquire().await?;
 
         let table = tables.tasks_table_full_name();
         let sql = format!("DELETE FROM {table} WHERE id = $1");
-        sqlx::query(&sql).bind(self.id).execute(&mut tx).await?;
+        sqlx::query(&sql).bind(self.id).execute(&mut *con).await?;
 
         let notify_fn = tables.tasks_notify_done_fn_full_name();
         let sql = format!("SELECT {notify_fn}($1)");
-        sqlx::query(&sql).bind(self.id).execute(&mut tx).await?;
+        sqlx::query(&sql).bind(self.id).execute(&mut *con).await?;
 
         tx.commit().await?;
 

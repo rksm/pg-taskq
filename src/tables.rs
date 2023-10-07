@@ -1,4 +1,4 @@
-use sqlx::{Pool, Postgres, Result, Transaction};
+use sqlx::{Acquire, PgConnection, Pool, Postgres, Result};
 
 /// Used to make the postgres table/view/function names pluggable. You'll
 /// typically want to use its implementor [`TaskTables`] that can be
@@ -76,7 +76,7 @@ pub struct TaskTableEntity {
 }
 
 impl TaskTableEntity {
-    async fn exists(&self, tx: &mut Transaction<'_, Postgres>) -> Result<bool> {
+    async fn exists(&self, tx: &mut PgConnection) -> Result<bool> {
         let Self {
             schema,
             name,
@@ -114,8 +114,8 @@ WHERE table_schema = $1 AND table_name = $2
         Ok(exists)
     }
 
-    async fn create(&self, tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-        if self.exists(tx).await? {
+    async fn create(&self, tx: &mut PgConnection) -> Result<()> {
+        if self.exists(&mut *tx).await? {
             return Ok(());
         }
         sqlx::query(&self.definition).execute(tx).await?;
@@ -123,7 +123,7 @@ WHERE table_schema = $1 AND table_name = $2
         Ok(())
     }
 
-    async fn drop(&self, tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    async fn drop(&self, tx: &mut PgConnection) -> Result<()> {
         if !self.exists(tx).await? {
             return Ok(());
         }
@@ -360,10 +360,11 @@ impl TaskTables {
     /// error if the entities already exist.
     pub async fn create(&self, pool: &Pool<Postgres>) -> Result<()> {
         let mut tx = pool.begin().await?;
-        self.tasks_table.create(&mut tx).await?;
-        self.tasks_notify.create(&mut tx).await?;
-        self.tasks_notify_done.create(&mut tx).await?;
-        self.tasks_ready.create(&mut tx).await?;
+        let con = tx.acquire().await?;
+        self.tasks_table.create(&mut *con).await?;
+        self.tasks_notify.create(&mut *con).await?;
+        self.tasks_notify_done.create(&mut *con).await?;
+        self.tasks_ready.create(&mut *con).await?;
         tx.commit().await?;
 
         Ok(())

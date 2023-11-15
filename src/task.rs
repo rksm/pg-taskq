@@ -496,14 +496,23 @@ WHERE id = $1"
         Ok(())
     }
 
-    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    #[instrument(level = "debug", skip(self, db,tables), fields(id=%self.id))]
     pub async fn wait_until_done(
         &mut self,
         db: &Pool<Postgres>,
         tables: &dyn TaskTableProvider,
         poll_interval: Option<std::time::Duration>,
     ) -> Result<()> {
-        Self::wait_for_tasks_to_be_done(vec![self], db, tables, poll_interval).await?;
+        loop {
+            match Self::wait_for_tasks_to_be_done(vec![self], db, tables, poll_interval).await {
+                Ok(_) => break,
+                Err(crate::Error::Db(sqlx::Error::PoolTimedOut)) => {
+                    warn!("pool timed out, retrying");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+        }
         Ok(())
     }
 

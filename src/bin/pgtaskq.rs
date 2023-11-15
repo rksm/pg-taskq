@@ -69,7 +69,7 @@ struct List {
 #[clap(about = "Delete tasks from the queue")]
 struct Delete {
     #[clap()]
-    id: uuid::Uuid,
+    id: String,
     // #[clap(
     //     long,
     //     default_value = "false",
@@ -275,7 +275,7 @@ async fn main() {
         SubCommand::Delete(cmd) => {
             let tables: &dyn TaskTableProvider = &tables;
 
-            let task = pg_taskq::Task::load(&pool, tables, cmd.id)
+            let task = pg_taskq::Task::load_matching(&pool, tables, &cmd.id)
                 .await
                 .expect("load task");
 

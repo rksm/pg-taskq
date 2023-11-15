@@ -71,7 +71,7 @@ pub struct Task {
 }
 
 impl Task {
-    #[instrument(level = "trace", skip(db, tables, req))]
+    #[instrument(level = "debug", skip(db, tables, req))]
     pub async fn create_task<'a, DB, P>(
         db: DB,
         tables: &P,
@@ -127,6 +127,16 @@ RETURNING *
         Ok(sqlx::query_as(&sql).bind(id).fetch_optional(db).await?)
     }
 
+    pub async fn load_matching(
+        db: impl PgExecutor<'_>,
+        tables: &dyn TaskTableProvider,
+        id: &str,
+    ) -> Result<Option<Self>> {
+        let table = tables.tasks_table_full_name();
+        let sql = format!("SELECT * FROM {table} WHERE id::text like '{id}%'");
+        Ok(sqlx::query_as(&sql).fetch_optional(db).await?)
+    }
+
     pub async fn with_children(
         self,
         db: impl PgExecutor<'_>,
@@ -145,7 +155,7 @@ RETURNING *
         Self::load_children(db, tables, self.id, false, recursive).await
     }
 
-    #[instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "debug", skip(db, tables))]
     pub async fn load_children(
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
@@ -177,7 +187,7 @@ SELECT * FROM tasks_and_subtasks {where_clause}
         Ok(sqlx::query_as(&sql).bind(id).fetch_all(db).await?)
     }
 
-    #[instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "debug", skip(db, tables))]
     pub async fn load_any_waiting(
         db: impl PgExecutor<'_>,
         tables: &dyn TaskTableProvider,
@@ -210,7 +220,7 @@ RETURNING *;
         Ok(task)
     }
 
-    #[instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "debug", skip(db, tables))]
     pub async fn load_waiting(
         id: Uuid,
         db: impl PgExecutor<'_>,
@@ -246,7 +256,7 @@ RETURNING *;
     }
 
     /// Sets the error value for the task
-    #[instrument(level = "trace", skip(db, tables))]
+    #[instrument(level = "debug", skip(db, tables))]
     pub async fn set_error(
         id: Uuid,
         db: impl Acquire<'_, Database = Postgres>,
@@ -289,7 +299,7 @@ WHERE id = $1"
     }
 
     /// Saves current state in DB
-    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    #[instrument(level = "debug", skip(self, db,tables), fields(id=%self.id))]
     pub async fn save(
         &self,
         db: impl Acquire<'_, Database = Postgres>,
@@ -338,7 +348,7 @@ WHERE id = $1"
     }
 
     /// Queries state of this task from DB and updates self.
-    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    #[instrument(level = "debug", skip(self, db,tables), fields(id=%self.id))]
     pub async fn update(
         &mut self,
         db: impl PgExecutor<'_>,
@@ -356,7 +366,7 @@ WHERE id = $1"
 
     /// Deletes this and all child tasks (recursively) from the DB. Call this
     /// when the task is done.
-    #[instrument(level = "trace", skip(self, db,tables), fields(id=%self.id))]
+    #[instrument(level = "debug", skip(self, db,tables), fields(id=%self.id))]
     pub async fn delete(
         &self,
         db: impl Acquire<'_, Database = Postgres>,
@@ -379,7 +389,7 @@ WHERE id = $1"
     }
 
     /// Fullfill task with result/error and mark as done
-    #[instrument(level = "trace", skip(self, db, tables, result, error), fields(id=%self.id))]
+    #[instrument(level = "debug", skip(self, db, tables, result, error), fields(id=%self.id))]
     pub async fn fullfill(
         &mut self,
         db: impl Acquire<'_, Database = Postgres>,
@@ -398,7 +408,7 @@ WHERE id = $1"
     /// Inbetween notifications, at `poll_interval`, will manually query for
     /// updated tasks. Will ensure that those tasks are updated when this method
     /// returns.
-    #[instrument(level = "trace", skip(pool, tables))]
+    #[instrument(level = "debug", skip(pool, tables))]
     async fn wait_for_tasks_to_be_done(
         tasks: Vec<&mut Self>,
         pool: &Pool<Postgres>,
